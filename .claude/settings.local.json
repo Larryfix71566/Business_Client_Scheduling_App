@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/larryfix/.claude/skills/markov-hedge-fund-method/**)",
+      "Bash(uv run *)",
+      "Bash(npm run *)",
+      "Bash(npx prisma *)",
+      "Bash(npx tsc *)",
+      "mcp__mail-smtp__send_email",
+      "Read(//Users/larryfix/.claude/scheduled-tasks/daily-markov-btcusd/**)"
+    ]
+  }
+}

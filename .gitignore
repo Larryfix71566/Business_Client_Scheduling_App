@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.pgdata/
+.env
+uploads/
+
+# build / test output
+/coverage
+/playwright-report
+/test-results
+/.turbo
+next-env.d.ts.timestamp
+*.log
+.DS_Store
+
+# TypeScript incremental build cache
+*.tsbuildinfo

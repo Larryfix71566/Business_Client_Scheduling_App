@@ -1,0 +1,322 @@
+// Multi-tenant business management app — full schema.
+// Guardrails: every tenant table has businessId; money is Int cents; time is UTC.
+// Some models/fields are used by later phases but are defined now so migrations
+// are stable. Do not use floats for money.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum AdjReason {
+  RECEIVED
+  SOLD
+  DAMAGED
+  MANUAL
+}
+
+enum ApptStatus {
+  REQUESTED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PayMethod {
+  SQUARE
+  CASH
+  OTHER
+}
+
+enum LineKind {
+  SERVICE
+  PRODUCT
+}
+
+// Phase 6: reconciliation state of a local Payment bookkeeping record.
+// UNMATCHED = recorded but not yet confirmed paid; PAID = confirmed (cash/other
+// marked directly, or a Square payment manually matched); REFUNDED = a refund
+// observed in Square has been reflected locally.
+enum PaymentStatus {
+  UNMATCHED
+  PAID
+  REFUNDED
+}
+
+model Business {
+  id                String   @id @default(cuid())
+  slug              String   @unique
+  name              String
+  taxRateBps        Int      @default(0)
+  cancelCutoffHours Int      @default(24)
+  squareAccessToken String?
+  squareLocationId  String?
+  brandingId        String?
+
+  users     User[]
+  locations Location[]
+  customers Customer[]
+}
+
+model Location {
+  id         String  @id @default(cuid())
+  businessId String
+  name       String
+  address    String
+  timezone   String  @default("America/New_York")
+  brandingId String?
+  // {mon:[["09:00","17:00"]],...} business-level open hours
+  weeklyHours Json
+
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  closures      DateClosure[]
+  userLocations UserLocation[]
+
+  @@index([businessId])
+}
+
+model User {
+  id               String  @id @default(cuid())
+  businessId       String
+  role             Role
+  email            String
+  passwordHash     String
+  name             String
+  requiresApproval Boolean @default(false)
+  depositEnabled   Boolean @default(false)
+  depositCents     Int     @default(0)
+  brandingId       String?
+
+  business  Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  locations UserLocation[]
+  services  Service[]
+
+  @@unique([businessId, email])
+  @@index([businessId])
+}
+
+model UserLocation {
+  id         String @id @default(cuid())
+  businessId String
+  userId     String
+  locationId String
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, locationId])
+  @@index([businessId])
+}
+
+model Branding {
+  id           String  @id @default(cuid())
+  businessId   String
+  logoPath     String?
+  bannerPath   String?
+  primaryColor String  @default("#1a1a2e")
+  accentColor  String  @default("#0f6")
+
+  @@index([businessId])
+}
+
+model Customer {
+  id         String  @id @default(cuid())
+  businessId String
+  firstName  String
+  lastName   String
+  phone      String
+  email      String?
+  notes      String?
+  smsOptIn   Boolean @default(false)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, phone])
+  @@index([businessId])
+}
+
+model Service {
+  id          String  @id @default(cuid())
+  businessId  String
+  userId      String
+  name        String
+  description String?
+  durationMin Int
+  bufferMin   Int     @default(0)
+  priceCents  Int
+  active      Boolean @default(true)
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consumes ServiceProduct[]
+
+  @@index([businessId])
+  @@index([userId])
+}
+
+model ServiceProduct {
+  id         String @id @default(cuid())
+  businessId String
+  serviceId  String
+  itemId     String
+  qty        Int
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+model InventoryItem {
+  id         String  @id @default(cuid())
+  businessId String
+  // exactly one owner: location (shared) or user (own)
+  locationId String?
+  userId     String?
+  name       String
+  barcode    String?
+  photoPath  String?
+  costCents  Int
+  priceCents Int
+  qtyOnHand  Int     @default(0)
+  lowStockAt Int     @default(0)
+
+  adjustments StockAdjustment[]
+
+  @@index([businessId])
+}
+
+model StockAdjustment {
+  id         String    @id @default(cuid())
+  itemId     String
+  businessId String
+  delta      Int
+  reason     AdjReason
+  byUserId   String
+  createdAt  DateTime  @default(now())
+
+  item InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([itemId])
+}
+
+model Schedule {
+  id         String @id @default(cuid())
+  businessId String
+  userId     String
+  locationId String
+  // {mon:[["09:00","17:00"]],...}
+  weekly Json
+
+  overrides ScheduleOverride[]
+
+  @@index([businessId])
+  @@index([userId])
+}
+
+model ScheduleOverride {
+  id         String   @id @default(cuid())
+  businessId String
+  scheduleId String
+  date       DateTime
+  closed     Boolean  @default(false)
+  reopen     Boolean  @default(false)
+  // optional replacement intervals for the date: [["09:00","12:00"]]
+  intervals  Json?
+
+  schedule Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+model DateClosure {
+  id         String   @id @default(cuid())
+  businessId String
+  locationId String
+  date       DateTime
+  reason     String?
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+model Appointment {
+  id               String     @id @default(cuid())
+  businessId       String
+  locationId       String
+  userId           String
+  customerId       String
+  serviceId        String
+  startsAt         DateTime
+  endsAt           DateTime
+  status           ApptStatus
+  depositPaymentId String?
+  cancelledAt      DateTime?
+  cancelledBy      String?
+  // Phase 4: opaque token for customer self-serve manage (cancel/reschedule)
+  // via a login-less magic link /b/[slug]/manage/[manageToken].
+  manageToken      String     @unique @default(cuid())
+  // Phase 4: set when a 24h reminder has been sent, to guarantee exactly-once.
+  reminderSentAt   DateTime?
+
+  @@index([businessId])
+  @@index([userId])
+  @@index([locationId])
+}
+
+model Payment {
+  id                  String    @id @default(cuid())
+  businessId          String
+  appointmentId       String?
+  customerId          String
+  userId              String
+  locationId          String
+  squarePaymentId     String?
+  subtotalCents       Int
+  taxCents            Int
+  tipCents            Int
+  depositAppliedCents Int           @default(0)
+  refundedCents       Int           @default(0)
+  method              PayMethod
+  status              PaymentStatus @default(UNMATCHED)
+  createdAt           DateTime      @default(now())
+
+  lines PaymentLine[]
+
+  @@index([businessId])
+}
+
+model PaymentLine {
+  id        String   @id @default(cuid())
+  paymentId String
+  kind      LineKind
+  refId     String
+  qty       Int
+  unitCents Int
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+}
+
+model NotificationLog {
+  id         String   @id @default(cuid())
+  businessId String
+  channel    String
+  to         String
+  template   String
+  status     String
+  createdAt  DateTime @default(now())
+
+  @@index([businessId])
+}
