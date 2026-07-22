@@ -15,3 +15,6 @@ next-env.d.ts.timestamp
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
